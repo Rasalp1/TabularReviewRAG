@@ -1,7 +1,9 @@
 import os
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify,CORS
 from threading import Lock
+from functools import wraps
+import jwt
 
 # LangChain components
 from langchain_community.document_loaders import PyPDFLoader
@@ -33,6 +35,47 @@ vectorstore_instance = None
 
 initialization_lock = Lock()
 
+def verify_supabase_jwt(token):
+    try:
+        # For production, it's safer to fetch the JWKS from Supabase (SUPABASE_URL/auth/v1/keys)
+        # and verify the token against the public keys.
+        # Using the direct JWT secret is simpler for development/smaller apps, but be careful.
+        decoded_token = jwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated", # This is the default audience for Supabase user JWTs
+            options={"verify_exp": True} # Verify expiration
+        )
+        return decoded_token
+    except jwt.ExpiredSignatureError:
+        print("JWT has expired!")
+        return None
+    except jwt.InvalidTokenError as e:
+        print(f"Invalid JWT: {e}")
+        return None
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({"message": "Authorization token is missing!"}), 401
+
+        try:
+            token = auth_header.split(" ")[1]
+            user_info = verify_supabase_jwt(token)
+            if user_info is None:
+                return jsonify({"message": "Token is invalid or expired!"}), 401
+
+            request.user_info = user_info # User info is now accessible in your endpoint function
+        except IndexError:
+            return jsonify({"message": "Token format is invalid (e.g., 'Bearer token')."}), 401
+        except Exception as e:
+            return jsonify({"message": f"Token error: {str(e)}"}), 401
+
+        return f(*args, **kwargs)
+    return decorated
 
 def get_embeddings_model():
     """Initializes and returns the Google Generative AI Embeddings model."""
@@ -150,6 +193,7 @@ def home():
     return "RAG Flask API is running!"
 
 @app.route('/ask', methods=['POST'])
+@token_required
 def ask_question():
     """
     Endpoint to ask questions about the document.
@@ -177,6 +221,7 @@ def ask_question():
         return jsonify({"error": "An error occurred while processing your question."}), 500
 
 @app.route('/index_document', methods=['POST'])
+@token_required
 def index_document_endpoint():
     """
     Endpoint to trigger document indexing.
