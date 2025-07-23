@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify,CORS
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from threading import Lock
 from functools import wraps
 import jwt
